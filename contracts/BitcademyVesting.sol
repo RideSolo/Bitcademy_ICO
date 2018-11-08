@@ -20,9 +20,7 @@ contract BitcademyVesting is Ownable {
   uint256 public duration;
   uint256 public interval;
   uint    public countRelease = 0;
-
-  uint256 public constant ReleaseCap = 150000000000000000000000000;
-
+  uint256 public ReleaseCap = 150000000000000000000000000;
   mapping (address=>bool) public members;
   mapping (address =>uint) public numReleases;
   mapping (address => uint) public nextRelease;
@@ -60,6 +58,7 @@ contract BitcademyVesting is Ownable {
   }
 
   function addMember(address _member) public onlyOwner {
+      require(_member != address(0));
       require(members[_member] == false);
       require(countRelease <= 0);
       members[_member] = true;
@@ -67,6 +66,7 @@ contract BitcademyVesting is Ownable {
   }
 
   function removeMember(address _member) public onlyOwner {
+      require(_member != address(0));
       require(members[_member] == true);
       require(countRelease <= 0);
       members[_member] = false;
@@ -79,16 +79,16 @@ contract BitcademyVesting is Ownable {
    */
   function release(BitcademyToken _token, address _member) onlyMember(_member) public {
      require (block.timestamp > cliff);
-     uint256 unreleased = _token.balanceOf(this);
-    
+     uint256 releasableToken = _token.balanceOf(this);
+     uint256 unreleased = 0;
 
-    require(unreleased > 0);
+    require(releasableToken > 0);
 
     require(numReleases[_member] <= Releases);
     if (numReleases[_member] == 0){
     require(block.timestamp >= interval.add(cliff));
-     released = released.add(unreleased);
      unreleased = ReleaseCap.div(noOfMembers.mul(Releases));
+     released = released.add(unreleased);
      //unreleased =  unreleased.div(noOfMembers);
      _token.transfer(_member, unreleased);
      numReleases[_member] = numReleases[_member].add(1);
@@ -109,5 +109,5 @@ contract BitcademyVesting is Ownable {
     emit Released(unreleased);
   }
 
- 
+
 }

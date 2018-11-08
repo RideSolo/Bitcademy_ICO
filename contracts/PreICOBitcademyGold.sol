@@ -28,7 +28,7 @@ contract Crowdsale is Ownable{
 
     //custom release date
    uint256 public release_date = 1556582400;
-  // No of wei needed for each token
+  // No of Tokens per Ether
   uint256 public rate;
 
   // Amount of wei raised
@@ -36,15 +36,20 @@ contract Crowdsale is Ownable{
 
 
   //amount of tokens to be sold for Private Sale preICO
-  uint256 public supply_cap = 150000000;
+  uint256 public supply_cap = 150000000*(10**18);
+  // maximum token selleable without bonuses
+  uint256 public minimumTokens = 93750000*(10**18);
+
 
   address[] public investors;
-  // Save Token Holder addresses
-  address public tokenHolder;
+
+
 
   mapping(address => bool) public whitelist;
   mapping (address => uint256) public tokenToClaim;
-
+  //mapping(address => uint256) public salesTimes;
+// amount invested by the investor
+   mapping (address => uint256) public investedAmount;
 
   uint256 public openingTime;
   uint256 public closingTime;
@@ -78,6 +83,9 @@ contract Crowdsale is Ownable{
     _;
   }
 
+
+
+
   bool public isFinalized = false;
 
   event Finalized();
@@ -103,6 +111,15 @@ contract Crowdsale is Ownable{
     require(isFinalized);
     require(!goalReached());
 
+    vault.refund(msg.sender);
+  }
+
+  /**
+   * @dev  Investors can claim refunds here if they are  blacklisted
+   */
+  function blacklistClaimRefund() public {
+    require(isFinalized);
+    require(tokenToClaim[msg.sender] > 0);
     vault.refund(msg.sender);
   }
 
@@ -144,13 +161,12 @@ contract Crowdsale is Ownable{
   /**
    * @param _rate No of tokens per ether
    * @param _multi_sig_wallet Address where collected funds will be forwarded to
-   * @param _token Address of the token being sold
+   * @param _goal the  token soft cap
    */
-  constructor(uint256 _rate, BitcademyToken _token, uint256 _openingTime, uint256 _closingTime,address _tokenHolder,address _multi_sig_wallet, uint256 _goal) public {
+  constructor(uint256 _rate , BitcademyToken _token, uint256 _openingTime, uint256 _closingTime, address _multi_sig_wallet, uint256 _goal) public {
     require(_rate > 0);
     require(_multi_sig_wallet != address(0));
     require(_token != address(0));
-    require(_tokenHolder!= address(0));
     require(_openingTime >= block.timestamp);
     require(_closingTime >= _openingTime);
     require(_goal > 0);
@@ -159,13 +175,9 @@ contract Crowdsale is Ownable{
     goal = _goal;
     rate = _rate;
     token = _token;
-    tokenHolder = _tokenHolder;
     openingTime = _openingTime;
     closingTime = _closingTime;
-    token.approve(address(this), supply_cap.mul(10**18));
-    remainingTokens = token.allowance(address(this) , tokenHolder);
-  }
-
+}
   // -----------------------------------------
   // Crowdsale external interface
   // -----------------------------------------
@@ -182,8 +194,12 @@ contract Crowdsale is Ownable{
    * @param _beneficiary Address performing the token purchase
    */
   function buyTokens(address _beneficiary) public payable {
-
+    uint256 mimimumInvestment = 10**18;
     uint256 weiAmount = msg.value;
+    if (investedAmount[_beneficiary] == 0){
+      require(weiAmount > mimimumInvestment);
+    }
+
     uint256 refundWeiAmt = 0;
     uint256 tokens = 0;
     _preValidatePurchase(_beneficiary, weiAmount);
@@ -212,7 +228,7 @@ contract Crowdsale is Ownable{
     );
 
     _updatePurchasingState(_beneficiary, weiAmount);
-    _forwardFunds();
+    _forwardFunds(weiAmount);
     _postValidatePurchase(_beneficiary, weiAmount);
   }
 
@@ -222,7 +238,6 @@ contract Crowdsale is Ownable{
    */
   function addToWhitelist(address _beneficiary) external onlyOwner {
     whitelist[_beneficiary] = true;
-    tokenToClaim[_beneficiary] = 0;
   }
 
   /**
@@ -232,7 +247,6 @@ contract Crowdsale is Ownable{
   function addManyToWhitelist(address[] _beneficiaries) external onlyOwner {
     for (uint256 i = 0; i < _beneficiaries.length; i++) {
       whitelist[_beneficiaries[i]] = true;
-      tokenToClaim[_beneficiaries[i]] = 0;
     }
   }
 
@@ -297,7 +311,8 @@ contract Crowdsale is Ownable{
   )
     internal
   {
-    token.transferFrom(tokenHolder,_beneficiary, _tokenAmount);
+    token.transfer(_beneficiary, _tokenAmount);
+
   }
 
   /**
@@ -318,7 +333,7 @@ contract Crowdsale is Ownable{
     tokenToClaim[_beneficiary] = _tokenAmount;
     }
     else{
-      tokenToClaim[_beneficiary] = tokenToClaim[_beneficiary] + _tokenAmount;
+      tokenToClaim[_beneficiary] = tokenToClaim[_beneficiary].add(_tokenAmount);
     }
   }
 
@@ -344,132 +359,45 @@ contract Crowdsale is Ownable{
   function _getTokenAmount(uint256 _weiAmount)
     internal  returns (uint256, uint256)
   {
-    //remainingTokens = remainingTokens.sub(_tokenAmount);
+    remainingTokens =  token.balanceOf(this);
     uint256 noOfTokens = 0;
     uint256 tokensInCondition = 0;
     uint256 weiAmount  = _weiAmount;
-    uint256 currentRate = rate.mul(16);
-    currentRate = rate.div(10);
+    uint256 currentRate = 0;
+    uint256 tokensMinusBonus = 0;
+    require(tokenSoldExcludeBonus < 93750000*(10**18));
+     currentRate = rate;
+      tokensMinusBonus = (weiAmount.div(currentRate))*(10**18);
+      tokenSoldExcludeBonus = tokenSoldExcludeBonus.add(tokensMinusBonus);
+      currentRate = rate.mul(10);
+      currentRate = rate.div(16);
+      tokensInCondition = (weiAmount.div(currentRate))*(10**18);
+      weiAmount = weiAmount.sub(tokensInCondition.mul(currentRate));
+      noOfTokens = noOfTokens.add(tokensInCondition);
+      remainingTokens = remainingTokens.sub(tokensInCondition);
 
-    if(remainingTokens > 300000000*(10**18)) {
-      currentRate = currentRate.mul(10);
-      currentRate = currentRate.div(13);
-      tokensInCondition = weiAmount.div(currentRate);
-      if(tokensInCondition > remainingTokens.sub(300000000*(10**18))){
-        tokensInCondition = remainingTokens.sub(300000000*(10**18));
-        weiAmount = weiAmount.sub(tokensInCondition.mul(currentRate));
-        noOfTokens = noOfTokens.add(tokensInCondition);
-        remainingTokens = remainingTokens.sub(noOfTokens);
-      }
-      else{
-        noOfTokens = tokensInCondition;
-        weiAmount = 0;
-      }
-    }
-
-    if (remainingTokens <= 300000000*(10**18) && remainingTokens > 250000000*(10**18) && weiAmount > 0){
-
-      currentRate = currentRate.mul(100);
-      currentRate = currentRate.div(125);
-      tokensInCondition = weiAmount.div(currentRate);
-      if(tokensInCondition > remainingTokens.sub(250000000*(10**18))){
-        tokensInCondition = remainingTokens.sub(250000000*(10**18));
-        weiAmount = weiAmount.sub(tokensInCondition.mul(currentRate));
-        noOfTokens = noOfTokens.add(tokensInCondition);
-        remainingTokens = remainingTokens.sub(noOfTokens);
-      }
-       else{
-        noOfTokens = tokensInCondition;
-        weiAmount = 0;
-      }
-    }
-    if (remainingTokens <= 250000000*(10**18) && remainingTokens > 200000000*(10**18) && weiAmount > 0 ){
-      currentRate = currentRate.mul(100);
-      currentRate = currentRate.div(120);
-      tokensInCondition = weiAmount.div(currentRate);
-      if(tokensInCondition > remainingTokens.sub(200000000*(10**18))){
-        tokensInCondition = remainingTokens.sub(200000000*(10**18));
-        weiAmount = weiAmount.sub(tokensInCondition.mul(currentRate));
-        noOfTokens = noOfTokens.add(tokensInCondition);
-        remainingTokens = remainingTokens.sub(noOfTokens);
-      }
-       else{
-        noOfTokens = tokensInCondition;
-        weiAmount = 0;
-      }
-    }
-    if (remainingTokens <= 200000000*(10**18) && remainingTokens > 150000000*(10**18) && weiAmount > 0 ){
-      currentRate = currentRate.mul(100);
-      currentRate = currentRate.div(115);
-      tokensInCondition = weiAmount.div(currentRate);
-      if(tokensInCondition > remainingTokens.sub(150000000*(10**18))){
-        tokensInCondition = remainingTokens.sub(150000000*(10**18));
-        weiAmount = weiAmount.sub(tokensInCondition.mul(currentRate));
-        noOfTokens = noOfTokens.add(tokensInCondition);
-        remainingTokens = remainingTokens.sub(noOfTokens);
-      }
-       else{
-        noOfTokens = tokensInCondition;
-        weiAmount = 0;
-      }
-    }
-     if (remainingTokens <= 150000000*(10**18) && remainingTokens > 100000000*(10**18) && weiAmount > 0){
-
-      currentRate = currentRate.mul(100);
-      currentRate = currentRate.div(110);
-      tokensInCondition = weiAmount.div(currentRate);
-      if(tokensInCondition > remainingTokens.sub(100000000*(10**18))){
-        tokensInCondition = remainingTokens.sub(100000000*(10**18));
-        weiAmount = weiAmount.sub(tokensInCondition.mul(currentRate));
-        noOfTokens = noOfTokens.add(tokensInCondition);
-        remainingTokens = remainingTokens.sub(noOfTokens);
-      }
-       else{
-        noOfTokens = tokensInCondition;
-        weiAmount = 0;
-      }
-    }
-
-    if (remainingTokens <= 100000000*(10**18) && remainingTokens > 50000000*(10**18) ){
-      currentRate = currentRate.mul(100);
-      currentRate = currentRate.div(105);
-      tokensInCondition = weiAmount.div(currentRate);
-      if(tokensInCondition > remainingTokens.sub(50000000*(10**18))){
-        tokensInCondition = remainingTokens.sub(50000000*(10**18));
-        weiAmount = weiAmount.sub(tokensInCondition.mul(currentRate));
-        noOfTokens = noOfTokens.add(tokensInCondition);
-        remainingTokens = remainingTokens.sub(noOfTokens);
-      }
-       else{
-        noOfTokens = tokensInCondition;
-        weiAmount = 0;
-      }
-    }
-    if(remainingTokens <= 50000000*(10**18)){
-      tokensInCondition = weiAmount.div(currentRate);
-      if(tokensInCondition > remainingTokens) {
-        noOfTokens = remainingTokens;
-        weiAmount = weiAmount.sub(noOfTokens.mul(currentRate));
-      }
-       else{
-        noOfTokens = tokensInCondition;
-        weiAmount = 0;
-      }
-    }
     return (noOfTokens, weiAmount);
   }
 
   /**
    * @dev Determines how ETH is stored/forwarded on purchases.
    */
-  function _forwardFunds() internal {
-    vault.deposit.value(msg.value - refundWeiAmt)(msg.sender);
+  function _forwardFunds(uint256 _value) internal {
+    vault.deposit.value(_value)(msg.sender);
+    if (investedAmount[msg.sender] == 0){
+      investedAmount[msg.sender] = _value;
+    }
+    else {
+      investedAmount[msg.sender] = investedAmount[msg.sender].add(_value);
+    }
+
     investors.push(msg.sender);
   }
    /**
    * @dev Set the exchange rate of the token
    */
   function setRate(uint256 _rate) public onlyOwner{
+    require(_rate > 0);
     rate = _rate;
   }
 
@@ -486,6 +414,7 @@ contract Crowdsale is Ownable{
    */
 
   function withdrawAfterMainSale() isWhitelisted(msg.sender) public {
+    require(goalReached());
     require(release_date < now);
     require(isFinalized);
     require(tokenToClaim[msg.sender] >= 0);
